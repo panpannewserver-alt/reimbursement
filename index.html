@@ -35,8 +35,8 @@ body{
 .container{max-width:980px}
 .asi-header{background:#fff;border-bottom:1px solid var(--asi-border)}
 .asi-brand{display:flex;align-items:center;gap:.75rem;padding:1rem 0}
-.asi-logo{height:34px}
-.asi-title{margin:0;font-weight:700;font-size:1.05rem}
+.asi-logo{height:36px}
+.asi-title{margin:0;font-weight:700;font-size:1.1rem}
 .asi-subtitle{margin:0;font-size:.85rem;color:var(--asi-slate)}
 .asi-card{
   background:#fff;
@@ -49,7 +49,6 @@ body{
   border-bottom:1px solid var(--asi-border);
   background:linear-gradient(90deg, rgba(195,29,44,.08), transparent);
 }
-.asi-card-header h2{margin:0;font-size:1.1rem;font-weight:800}
 .asi-card-body{padding:1.25rem}
 .form-label{font-weight:600;color:var(--asi-slate)}
 .form-control{border-radius:10px;border-color:var(--asi-border)}
@@ -61,10 +60,8 @@ body{
   border-radius:10px;
 }
 .btn-asi-primary:hover{background:var(--asi-red-dark)}
-.btn-asi-secondary{border-radius:10px;font-weight:700}
 .table-wrap{border:1px solid var(--asi-border);border-radius:14px;overflow:hidden;background:#fff}
 .table thead th{background:rgba(195,29,44,.08);font-weight:800}
-.preview{font-size:.9rem;color:var(--asi-slate)}
 .total-row{
   background:#fff3f4;
   font-weight:900;
@@ -201,7 +198,7 @@ body{
             <th>Description</th>
             <th>GST (AUD)</th>
             <th>Total (AUD)</th>
-            <th style="width:90px;">Action</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -236,9 +233,7 @@ function toggleBankFields(){
 
 function updateTotals(){
   let total = 0;
-  for(let i=0;i<expenses.length;i++){
-    total += Number(expenses[i].amount || 0);
-  }
+  expenses.forEach(e => total += Number(e.amount || 0));
   grandTotal.textContent = formatMoney(total);
   expenseCount.textContent = expenses.length + ' expense(s) added';
 }
@@ -247,19 +242,16 @@ function renderTable(){
   const tbody = expenseTable.querySelector('tbody');
   tbody.innerHTML = '';
 
-  for(let i=0;i<expenses.length;i++){
-    const e = expenses[i];
+  expenses.forEach((e, i) => {
     const r = tbody.insertRow();
     r.innerHTML =
-      '<td>'+e.date+'</td>'+
-      '<td>'+e.job+'</td>'+
-      '<td>'+e.desc+'</td>'+
-      '<td class="text-end">'+e.gst+'</td>'+
-      '<td class="text-end">'+e.amount+'</td>'+
-      '<td class="text-center">' +
-        '<button type="button" class="btn btn-outline-danger btn-sm" onclick="removeExpense('+i+')">Remove</button>' +
-      '</td>';
-  }
+      `<td>${e.date}</td>
+       <td>${e.job}</td>
+       <td>${e.desc}</td>
+       <td class="text-end">${e.gst}</td>
+       <td class="text-end">${e.amount}</td>
+       <td><button class="btn btn-outline-danger btn-sm" onclick="removeExpense(${i})">Remove</button></td>`;
+  });
 }
 
 function addExpense(){
@@ -291,8 +283,60 @@ function removeExpense(index){
   updateTotals();
 }
 
-/* generateMergedPDF() remains unchanged from your working version */
+/* ===== FULL WORKING PDF FUNCTION ===== */
+async function generateMergedPDF(){
+
+  if(!expenses.length){
+    alert('Add at least one expense.');
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const summary = new jsPDF();
+
+  summary.setFontSize(16);
+  summary.text('Employee Reimbursement Claim', 14, 18);
+
+  summary.setFontSize(10);
+  summary.text('Employee: ' + empName.value, 14, 26);
+  summary.text('Email: ' + empEmail.value, 14, 32);
+  summary.text('Submitted: ' + new Date().toLocaleString(), 14, 38);
+
+  summary.autoTable({
+    startY: 48,
+    head: [['Date','Job / PO','Description','GST (AUD)','Total (AUD)']],
+    body: expenses.map(e => [e.date,e.job,e.desc,e.gst,e.amount]),
+    styles:{fontSize:10},
+    headStyles:{fillColor:[195,29,44]}
+  });
+
+  summary.text('TOTAL REIMBURSEMENT (AUD): ' + grandTotal.textContent,
+               14,
+               summary.lastAutoTable.finalY + 10);
+
+  const finalPdf = await PDFLib.PDFDocument.load(summary.output('arraybuffer'));
+
+  for(const file of attachedFiles){
+    const bytes = await file.arrayBuffer();
+
+    if(file.type === 'application/pdf'){
+      const pdf = await PDFLib.PDFDocument.load(bytes);
+      const pages = await finalPdf.copyPages(pdf, pdf.getPageIndices());
+      pages.forEach(p => finalPdf.addPage(p));
+    }
+  }
+
+  const out = await finalPdf.save();
+  const blob = new Blob([out], {type:'application/pdf'});
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'reimbursement_claim_merged.pdf';
+  link.click();
+}
+
+updateTotals();
 </script>
 
 </body>
 </html>
+
