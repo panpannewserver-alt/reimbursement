@@ -152,7 +152,7 @@ body{
         </div>
         <div class="col-md-2">
           <label class="form-label">Job / PO</label>
-          <input type="text" class="form-control" id="job">
+          <input type="text" class="form-control" id="job" placeholder="Optional">
         </div>
         <div class="col-md-2">
           <label class="form-label">Total (GST incl.)</label>
@@ -169,7 +169,7 @@ body{
 
         <div class="col-12">
           <label class="form-label">Purpose / Description</label>
-          <input type="text class="form-control" id="description" required>
+          <input type="text" class="form-control" id="description" required>
         </div>
       </div>
 
@@ -198,7 +198,7 @@ body{
             <th>Description</th>
             <th>GST (AUD)</th>
             <th>Total (AUD)</th>
-            <th>Action</th>
+            <th style="width:90px;">Action</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -219,10 +219,31 @@ body{
 const expenses = [];
 let attachedFiles = [];
 
+const currencyFormatter = new Intl.NumberFormat('en-AU', {
+  style: 'currency',
+  currency: 'AUD'
+});
+
+function formatCurrency(v){
+  return currencyFormatter.format(Number(v || 0));
+}
+
+function formatDateTime(d){
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(d);
+}
+
 function formatMoney(v){ return Number(v || 0).toFixed(2); }
 
 function calculateGST(){
-  gst.value = formatMoney(Number(amount.value || 0) / 11);
+  const total = Number(amount.value || 0);
+  gst.value = formatMoney(total / 11);
 }
 
 function toggleBankFields(){
@@ -234,7 +255,7 @@ function toggleBankFields(){
 function updateTotals(){
   let total = 0;
   expenses.forEach(function(e){ total += Number(e.amount || 0); });
-  grandTotal.textContent = formatMoney(total);
+  grandTotal.textContent = formatCurrency(total);
   expenseCount.textContent = expenses.length + ' expense(s) added';
 }
 
@@ -248,9 +269,11 @@ function renderTable(){
       '<td>'+e.date+'</td>'+
       '<td>'+e.job+'</td>'+
       '<td>'+e.desc+'</td>'+
-      '<td class="text-end">'+e.gst+'</td>'+
-      '<td class="text-end">'+e.amount+'</td>'+
-      '<td><button class="btn btn-outline-danger btn-sm" onclick="removeExpense('+i+')">Remove</button></td>';
+      '<td class="text-end">'+formatCurrency(e.gst)+'</td>'+
+      '<td class="text-end">'+formatCurrency(e.amount)+'</td>'+
+      '<td class="text-center">' +
+        '<button type="button" class="btn btn-outline-danger btn-sm" onclick="removeExpense('+i+')">Remove</button>' +
+      '</td>';
   });
 }
 
@@ -264,12 +287,15 @@ function addExpense(){
     attachedFiles = Array.from(files.files);
   }
 
+  const total = Number(amount.value);
+  const gstValue = total / 11;
+
   expenses.push({
     date: date.value,
     job: job.value || '-',
     desc: description.value,
-    gst: formatMoney(gst.value),
-    amount: formatMoney(amount.value)
+    gst: gstValue,
+    amount: total
   });
 
   expenseForm.reset();
@@ -283,14 +309,37 @@ function removeExpense(index){
   updateTotals();
 }
 
-/* ===== Make Generate PDF button always work ===== */
+function downloadBlob(blob, filename){
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+}
+
+async function toDataURL(url){
+  // Safely attempt; if blocked (CORS), return null
+  try{
+    const response = await fetch(url);
+    const blob = await response.blob();
+    return await new Promise(function(resolve){
+      const reader = new FileReader();
+      reader.onloadend = function(){ resolve(reader.result); };
+      reader.readAsDataURL(blob);
+    });
+  }catch(e){
+    console.warn('Logo could not be embedded (fetch/CORS). PDF still generated.', e);
+    return null;
+  }
+}
+
+/* ===== Improved Generate PDF with logo, currency, borders, double rule, and merged attachments ===== */
 async function generateMergedPDF(){
+
   if(!expenses.length){
     alert('Add at least one expense.');
     return;
   }
 
-  // Safely get jsPDF
   const jsPDFRef = window.jspdf && window.jspdf.jsPDF ? window.jspdf.jsPDF : (window.jsPDF || null);
   if(!jsPDFRef){
     alert('PDF library failed to load. Please refresh.');
@@ -298,41 +347,74 @@ async function generateMergedPDF(){
   }
 
   const summary = new jsPDFRef();
-  summary.setFontSize(16);
-  summary.text('Employee Reimbursement Claim', 14, 18);
+  const logoUrl = 'https://alliancesi.com.au/wp-content/uploads/2021/06/alliancesi-logo.png';
+  const logoData = await toDataURL(logoUrl);
 
-  summary.setFontSize(10);
-  summary.text('Employee: ' + (empName.value || ''), 14, 26);
-  summary.text('Email: ' + (empEmail.value || ''), 14, 32);
-  summary.text('Submitted: ' + new Date().toLocaleString(), 14, 38);
-
-  try{
-    summary.autoTable({
-      startY: 48,
-      head: [['Date','Job / PO','Description','GST (AUD)','Total (AUD)']],
-      body: expenses.map(function(e){ return [e.date,e.job,e.desc,e.gst,e.amount]; }),
-      styles:{fontSize:10},
-      headStyles:{fillColor:[195,29,44]}
-    });
-  }catch(err){
-    console.error('autoTable failed', err);
-    // Continue anyway
+  // Header with logo (if available)
+  if(logoData){
+    try{
+      summary.addImage(logoData, 'PNG', 14, 8, 50, 12);
+    }catch(e){
+      console.warn('Logo addImage failed, continuing without logo', e);
+    }
   }
 
-  const totalY = summary.lastAutoTable && summary.lastAutoTable.finalY ? summary.lastAutoTable.finalY + 10 : 48 + 10;
-  summary.setFontSize(11);
-  summary.text('TOTAL REIMBURSEMENT (AUD): ' + grandTotal.textContent, 14, totalY);
+  summary.setFontSize(16);
+  summary.text('Employee Reimbursement Claim', 14, 28);
 
-  // Try full merge with pdf-lib. If it fails, just download summary.
+  summary.setFontSize(10);
+  summary.text('Employee: ' + (empName.value || ''), 14, 36);
+  summary.text('Email: ' + (empEmail.value || ''), 14, 42);
+  summary.text('Submitted: ' + formatDateTime(new Date()), 14, 48);
+
+  // Payment / bank info unchanged in summary
+  summary.autoTable({
+    startY: 56,
+    head: [['Date','Job / PO','Description','GST (AUD)','Total (AUD)']],
+    body: expenses.map(function(e){
+      return [
+        e.date,
+        e.job,
+        e.desc,
+        formatCurrency(e.gst),
+        formatCurrency(e.amount)
+      ];
+    }),
+    theme: 'grid',
+    styles: {
+      fontSize: 10,
+      lineWidth: 0.2,
+      halign: 'left',
+      valign: 'middle',
+      cellPadding: 3
+    },
+    headStyles: {
+      fillColor: [195, 29, 44],
+      textColor: 255
+    }
+  });
+
+  // Double rule totals under table
+  const lineY = summary.lastAutoTable && summary.lastAutoTable.finalY ? summary.lastAutoTable.finalY + 6 : 62;
+  summary.setLineWidth(0.7);
+  summary.line(14, lineY, 196, lineY);
+  summary.setLineWidth(0.2);
+  summary.line(14, lineY+2, 196, lineY+2);
+
+  summary.setFontSize(11);
+  summary.text('TOTAL REIMBURSEMENT (AUD): ' + grandTotal.textContent, 14, lineY + 8);
+
+  // Attempt merge with pdf-lib; fallback to summary only if needed
   try{
     if(!window.PDFLib || !window.PDFLib.PDFDocument){
       throw new Error('pdf-lib not available');
     }
 
-    const PDFDocument = window.PDFLib.PDFDocument;
     const summaryBytes = summary.output('arraybuffer');
+    const PDFDocument = window.PDFLib.PDFDocument;
     const finalPdf = await PDFDocument.load(summaryBytes);
 
+    // Attachments start page 2 by design (summary already page 1)
     for(const file of attachedFiles){
       const bytes = await file.arrayBuffer();
 
@@ -342,9 +424,9 @@ async function generateMergedPDF(){
         pages.forEach(function(p){ finalPdf.addPage(p); });
       } else if(file.type.indexOf('image/') === 0){
         const imgDoc = await PDFDocument.create();
-        const page = imgDoc.addPage([595,842]);
-
+        imgDoc.addPage([595,842]);
         let img;
+
         if(file.type.indexOf('png') > -1){
           img = await imgDoc.embedPng(bytes);
         } else {
@@ -352,7 +434,7 @@ async function generateMergedPDF(){
         }
 
         const dims = img.scaleToFit(550,780);
-        page.drawImage(img,{x:22,y:30,width:dims.width,height:dims.height});
+        imgDoc.getPage(0).drawImage(img,{x:22,y:30,width:dims.width,height:dims.height});
 
         const copied = await finalPdf.copyPages(imgDoc,[0]);
         finalPdf.addPage(copied[0]);
@@ -360,18 +442,12 @@ async function generateMergedPDF(){
     }
 
     const out = await finalPdf.save();
-    const blob = new Blob([out], {type:'application/pdf'});
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = 'reimbursement_claim_merged.pdf';
-    link.click();
+    downloadBlob(new Blob([out], {type:'application/pdf'}), 'reimbursement_claim_merged.pdf');
+
   }catch(err){
-    console.error('Merge failed, downloading summary only', err);
+    console.error('Merge failed; downloading summary PDF only', err);
     const blob = summary.output('blob');
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = 'reimbursement_claim.pdf';
-    link.click();
+    downloadBlob(blob, 'reimbursement_claim.pdf');
   }
 }
 
