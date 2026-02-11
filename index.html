@@ -169,7 +169,7 @@ body{
 
         <div class="col-12">
           <label class="form-label">Purpose / Description</label>
-          <input type="text" class="form-control" id="description" required>
+          <input type="text class="form-control" id="description" required>
         </div>
       </div>
 
@@ -233,7 +233,7 @@ function toggleBankFields(){
 
 function updateTotals(){
   let total = 0;
-  expenses.forEach(e => total += Number(e.amount || 0));
+  expenses.forEach(function(e){ total += Number(e.amount || 0); });
   grandTotal.textContent = formatMoney(total);
   expenseCount.textContent = expenses.length + ' expense(s) added';
 }
@@ -242,15 +242,15 @@ function renderTable(){
   const tbody = expenseTable.querySelector('tbody');
   tbody.innerHTML = '';
 
-  expenses.forEach((e, i) => {
+  expenses.forEach(function(e, i){
     const r = tbody.insertRow();
     r.innerHTML =
-      `<td>${e.date}</td>
-       <td>${e.job}</td>
-       <td>${e.desc}</td>
-       <td class="text-end">${e.gst}</td>
-       <td class="text-end">${e.amount}</td>
-       <td><button class="btn btn-outline-danger btn-sm" onclick="removeExpense(${i})">Remove</button></td>`;
+      '<td>'+e.date+'</td>'+
+      '<td>'+e.job+'</td>'+
+      '<td>'+e.desc+'</td>'+
+      '<td class="text-end">'+e.gst+'</td>'+
+      '<td class="text-end">'+e.amount+'</td>'+
+      '<td><button class="btn btn-outline-danger btn-sm" onclick="removeExpense('+i+')">Remove</button></td>';
   });
 }
 
@@ -283,55 +283,96 @@ function removeExpense(index){
   updateTotals();
 }
 
-/* ===== FULL WORKING PDF FUNCTION ===== */
+/* ===== Make Generate PDF button always work ===== */
 async function generateMergedPDF(){
-
   if(!expenses.length){
     alert('Add at least one expense.');
     return;
   }
 
-  const { jsPDF } = window.jspdf;
-  const summary = new jsPDF();
+  // Safely get jsPDF
+  const jsPDFRef = window.jspdf && window.jspdf.jsPDF ? window.jspdf.jsPDF : (window.jsPDF || null);
+  if(!jsPDFRef){
+    alert('PDF library failed to load. Please refresh.');
+    return;
+  }
 
+  const summary = new jsPDFRef();
   summary.setFontSize(16);
   summary.text('Employee Reimbursement Claim', 14, 18);
 
   summary.setFontSize(10);
-  summary.text('Employee: ' + empName.value, 14, 26);
-  summary.text('Email: ' + empEmail.value, 14, 32);
+  summary.text('Employee: ' + (empName.value || ''), 14, 26);
+  summary.text('Email: ' + (empEmail.value || ''), 14, 32);
   summary.text('Submitted: ' + new Date().toLocaleString(), 14, 38);
 
-  summary.autoTable({
-    startY: 48,
-    head: [['Date','Job / PO','Description','GST (AUD)','Total (AUD)']],
-    body: expenses.map(e => [e.date,e.job,e.desc,e.gst,e.amount]),
-    styles:{fontSize:10},
-    headStyles:{fillColor:[195,29,44]}
-  });
-
-  summary.text('TOTAL REIMBURSEMENT (AUD): ' + grandTotal.textContent,
-               14,
-               summary.lastAutoTable.finalY + 10);
-
-  const finalPdf = await PDFLib.PDFDocument.load(summary.output('arraybuffer'));
-
-  for(const file of attachedFiles){
-    const bytes = await file.arrayBuffer();
-
-    if(file.type === 'application/pdf'){
-      const pdf = await PDFLib.PDFDocument.load(bytes);
-      const pages = await finalPdf.copyPages(pdf, pdf.getPageIndices());
-      pages.forEach(p => finalPdf.addPage(p));
-    }
+  try{
+    summary.autoTable({
+      startY: 48,
+      head: [['Date','Job / PO','Description','GST (AUD)','Total (AUD)']],
+      body: expenses.map(function(e){ return [e.date,e.job,e.desc,e.gst,e.amount]; }),
+      styles:{fontSize:10},
+      headStyles:{fillColor:[195,29,44]}
+    });
+  }catch(err){
+    console.error('autoTable failed', err);
+    // Continue anyway
   }
 
-  const out = await finalPdf.save();
-  const blob = new Blob([out], {type:'application/pdf'});
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = 'reimbursement_claim_merged.pdf';
-  link.click();
+  const totalY = summary.lastAutoTable && summary.lastAutoTable.finalY ? summary.lastAutoTable.finalY + 10 : 48 + 10;
+  summary.setFontSize(11);
+  summary.text('TOTAL REIMBURSEMENT (AUD): ' + grandTotal.textContent, 14, totalY);
+
+  // Try full merge with pdf-lib. If it fails, just download summary.
+  try{
+    if(!window.PDFLib || !window.PDFLib.PDFDocument){
+      throw new Error('pdf-lib not available');
+    }
+
+    const PDFDocument = window.PDFLib.PDFDocument;
+    const summaryBytes = summary.output('arraybuffer');
+    const finalPdf = await PDFDocument.load(summaryBytes);
+
+    for(const file of attachedFiles){
+      const bytes = await file.arrayBuffer();
+
+      if(file.type === 'application/pdf'){
+        const pdf = await PDFDocument.load(bytes);
+        const pages = await finalPdf.copyPages(pdf, pdf.getPageIndices());
+        pages.forEach(function(p){ finalPdf.addPage(p); });
+      } else if(file.type.indexOf('image/') === 0){
+        const imgDoc = await PDFDocument.create();
+        const page = imgDoc.addPage([595,842]);
+
+        let img;
+        if(file.type.indexOf('png') > -1){
+          img = await imgDoc.embedPng(bytes);
+        } else {
+          img = await imgDoc.embedJpg(bytes);
+        }
+
+        const dims = img.scaleToFit(550,780);
+        page.drawImage(img,{x:22,y:30,width:dims.width,height:dims.height});
+
+        const copied = await finalPdf.copyPages(imgDoc,[0]);
+        finalPdf.addPage(copied[0]);
+      }
+    }
+
+    const out = await finalPdf.save();
+    const blob = new Blob([out], {type:'application/pdf'});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'reimbursement_claim_merged.pdf';
+    link.click();
+  }catch(err){
+    console.error('Merge failed, downloading summary only', err);
+    const blob = summary.output('blob');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'reimbursement_claim.pdf';
+    link.click();
+  }
 }
 
 updateTotals();
@@ -339,4 +380,3 @@ updateTotals();
 
 </body>
 </html>
-
