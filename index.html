@@ -239,11 +239,9 @@ function formatDateTime(d){
   }).format(d);
 }
 
-function formatMoney(v){ return Number(v || 0).toFixed(2); }
-
 function calculateGST(){
   const total = Number(amount.value || 0);
-  gst.value = formatMoney(total / 11);
+  gst.value = (total / 11).toFixed(2);
 }
 
 function toggleBankFields(){
@@ -283,8 +281,9 @@ function addExpense(){
     return;
   }
 
+  // IMPORTANT: accumulate attachments across multiple expense lines
   if(files.files.length){
-    attachedFiles = Array.from(files.files);
+    attachedFiles = attachedFiles.concat(Array.from(files.files));
   }
 
   const total = Number(amount.value);
@@ -317,7 +316,6 @@ function downloadBlob(blob, filename){
 }
 
 async function toDataURL(url){
-  // Safely attempt; if blocked (CORS), return null
   try{
     const response = await fetch(url);
     const blob = await response.blob();
@@ -327,14 +325,13 @@ async function toDataURL(url){
       reader.readAsDataURL(blob);
     });
   }catch(e){
-    console.warn('Logo could not be embedded (fetch/CORS). PDF still generated.', e);
+    console.warn('Logo embed failed; continuing without logo.', e);
     return null;
   }
 }
 
-/* ===== Improved Generate PDF with logo, currency, borders, double rule, and merged attachments ===== */
+/* ===== Generate PDF: logo, payment method, and all attachments merged starting page 2 ===== */
 async function generateMergedPDF(){
-
   if(!expenses.length){
     alert('Add at least one expense.');
     return;
@@ -350,12 +347,11 @@ async function generateMergedPDF(){
   const logoUrl = 'https://alliancesi.com.au/wp-content/uploads/2021/06/alliancesi-logo.png';
   const logoData = await toDataURL(logoUrl);
 
-  // Header with logo (if available)
   if(logoData){
     try{
       summary.addImage(logoData, 'PNG', 14, 8, 50, 12);
     }catch(e){
-      console.warn('Logo addImage failed, continuing without logo', e);
+      console.warn('Logo addImage failed', e);
     }
   }
 
@@ -367,44 +363,38 @@ async function generateMergedPDF(){
   summary.text('Email: ' + (empEmail.value || ''), 14, 42);
   summary.text('Submitted: ' + formatDateTime(new Date()), 14, 48);
 
-  // Payment / bank info unchanged in summary
+  // Payment method line (new)
+  var pmText = 'Payment Method: ';
+  if(paymentMethod.value === 'payroll'){
+    pmText += 'Payroll Account';
+  } else {
+    pmText += 'Alternate Bank Account (' + (bsb.value || '-') + '/' + (accountNumber.value || '-') + ')';
+  }
+  summary.text(pmText, 14, 54);
+
+  // Table summary (grid style)
   summary.autoTable({
-    startY: 56,
+    startY: 62,
     head: [['Date','Job / PO','Description','GST (AUD)','Total (AUD)']],
     body: expenses.map(function(e){
-      return [
-        e.date,
-        e.job,
-        e.desc,
-        formatCurrency(e.gst),
-        formatCurrency(e.amount)
-      ];
+      return [e.date, e.job, e.desc, formatCurrency(e.gst), formatCurrency(e.amount)];
     }),
     theme: 'grid',
-    styles: {
-      fontSize: 10,
-      lineWidth: 0.2,
-      halign: 'left',
-      valign: 'middle',
-      cellPadding: 3
-    },
-    headStyles: {
-      fillColor: [195, 29, 44],
-      textColor: 255
-    }
+    styles: { fontSize: 10, lineWidth: 0.2 },
+    headStyles: { fillColor: [195, 29, 44], textColor: 255 }
   });
 
-  // Double rule totals under table
-  const lineY = summary.lastAutoTable && summary.lastAutoTable.finalY ? summary.lastAutoTable.finalY + 6 : 62;
+  // Total line and "double rule" feel
+  const afterY = summary.lastAutoTable.finalY + 6;
   summary.setLineWidth(0.7);
-  summary.line(14, lineY, 196, lineY);
+  summary.line(14, afterY, 196, afterY);
   summary.setLineWidth(0.2);
-  summary.line(14, lineY+2, 196, lineY+2);
+  summary.line(14, afterY + 2, 196, afterY + 2);
 
   summary.setFontSize(11);
-  summary.text('TOTAL REIMBURSEMENT (AUD): ' + grandTotal.textContent, 14, lineY + 8);
+  summary.text('TOTAL REIMBURSEMENT (AUD): ' + grandTotal.textContent, 14, afterY + 8);
 
-  // Attempt merge with pdf-lib; fallback to summary only if needed
+  // Merge attachments via pdf-lib; fallback to summary only if pdf-lib fails
   try{
     if(!window.PDFLib || !window.PDFLib.PDFDocument){
       throw new Error('pdf-lib not available');
@@ -414,7 +404,7 @@ async function generateMergedPDF(){
     const PDFDocument = window.PDFLib.PDFDocument;
     const finalPdf = await PDFDocument.load(summaryBytes);
 
-    // Attachments start page 2 by design (summary already page 1)
+    // attachments merged page 2+ by design
     for(const file of attachedFiles){
       const bytes = await file.arrayBuffer();
 
@@ -422,11 +412,12 @@ async function generateMergedPDF(){
         const pdf = await PDFDocument.load(bytes);
         const pages = await finalPdf.copyPages(pdf, pdf.getPageIndices());
         pages.forEach(function(p){ finalPdf.addPage(p); });
-      } else if(file.type.indexOf('image/') === 0){
+      }
+      else if(file.type.indexOf('image/') === 0){
         const imgDoc = await PDFDocument.create();
         imgDoc.addPage([595,842]);
-        let img;
 
+        let img;
         if(file.type.indexOf('png') > -1){
           img = await imgDoc.embedPng(bytes);
         } else {
@@ -446,8 +437,7 @@ async function generateMergedPDF(){
 
   }catch(err){
     console.error('Merge failed; downloading summary PDF only', err);
-    const blob = summary.output('blob');
-    downloadBlob(blob, 'reimbursement_claim.pdf');
+    downloadBlob(summary.output('blob'), 'reimbursement_claim.pdf');
   }
 }
 
